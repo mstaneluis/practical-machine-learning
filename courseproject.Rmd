@@ -1,0 +1,117 @@
+---
+title: "Practical Machine Learning"
+subtitle: "Course Project"
+author: "Marque Staneluis"
+date: "March 25, 2018"
+output: html_document
+---
+```{r, echo = F, warning=F, results='hide', message=F, cache = T}
+require(caret)
+require(randomForest)
+```
+
+### Introduction
+One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it.  
+
+This human activity recognition research has traditionally focused on discriminating between different activities, i.e. to predict "which" activity was performed at a specific point in time (like with the Daily Living Activities dataset above). The approach we propose for the Weight Lifting Exercises dataset is to investigate "how (well)" an activity was performed by the wearer. The "how (well)" investigation has only received little attention so far, even though it potentially provides useful information for a large variety of applications,such as sports training.
+
+### Premise
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement---a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, the goal is to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. 
+Six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E).
+
+More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+### Load Data
+In this section, load the data and the 20 cases.
+```{r, cache = T}
+rm(list = ls())
+if (!file.exists("pml-training.csv")) {
+  download.file("http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", destfile = "pml-training.csv")
+}
+if (!file.exists("pml-testing.csv")) {
+  download.file("http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", destfile = "pml-testing.csv")
+}
+pmltesting <- read.csv("pml-testing.csv", sep = ",", na.strings = c("", "NA"))
+pmltraining <- read.csv("pml-training.csv", sep = ",", na.strings = c("", "NA"))
+```
+
+### Cleanup the data
+Remove columns full of NAs and remove features that are not in the data set. The features containing NAs are the variance, mean and stddev within each window for each feature. Remove the first 7 features since they are related to the time-series or are not numeric and, since, the "pmltesting dataset"" has no time-dependence, these values are useless and can be disregarded.
+
+```{r, cache = T}
+# Remove columns full of NAs.
+features <- names(pmltesting[,colSums(is.na(pmltesting)) == 0])[8:59]
+# Only use features used in pmltesting cases.
+pmltraining <- pmltraining[,c(features,"classe")]
+pmltesting <- pmltesting[,c(features,"problem_id")]
+```
+
+### Bootstrap
+Create a training and testing data set.  Traiing will done on 75% of the data while validation is confirmed by testing with the other 25%.
+```{r, cache = T}
+set.seed(916)
+inTrain = createDataPartition(pmltraining$classe, p = 0.75, list = F)
+training = pmltraining[inTrain,]
+testing = pmltraining[-inTrain,]
+```
+
+### Feature Determination
+Some features may be highly correlated. The PCA method mixes the final features into components that are difficult to interpret; instead, I drop features with high correlation (>90%).
+```{r, cache = T}
+outcome = which(names(training) == "classe")
+hiCorrelationColumns = findCorrelation(abs(cor(training[,-outcome])),0.90)
+hiCorrelationFeatures = names(training)[hiCorrelationColumns]
+training = training[,-hiCorrelationColumns]
+outcome = which(names(training) == "classe")
+```
+
+The features with high correlation are `r hiCorrelationFeatures[1:length(hiCorrelationFeatures)-1]`, and `r hiCorrelationFeatures[length(hiCorrelationFeatures)]`.
+
+### Training
+Train using the random forest and k-nearest neighbors for comparison.
+```{r, cache = T}
+ctrlKNN = trainControl(method = "adaptive_cv")
+modelKNN = train(classe ~ ., training, method = "knn", trControl = ctrlKNN)
+ctrlRF = trainControl(method = "oob")
+modelRF = train(classe ~ ., training, method = "rf", ntree = 200, trControl = ctrlRF)
+resultsKNN = data.frame(modelKNN$results)
+resultsRF = data.frame(modelRF$results)
+```
+
+### Testing Out-of-sample error
+The random forest will give a larger accuracy compared to k-nearest neighbors. Using the confusion matrix between the KNN and RF models to see how much they agree on the test set, then compare each model using the test set outcomes.
+```{r, cache = T}
+fitKNN = predict(modelKNN, testing)
+fitRF = predict(modelRF, testing)
+```
+#### KNN vs. RF
+```{r, cache = T, echo = F}
+confusionMatrix(fitRF, fitKNN)
+```
+#### KNN vs. test set
+```{r,cache=T, echo = F}
+confusionMatrix(fitKNN, testing$classe)
+```
+#### RF vs. test set
+```{r, cache = T, echo = F}
+confusionMatrix(fitRF, testing$classe)
+```
+The random forest fit is clearly more accurate than the k-nearest neighbors method with 99% accuracy.
+
+### Prediction
+Use the random forest model to predict on the 20 cases.
+```{r, cache = T,echo = F}
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+answers = predict(modelRF, pmltesting)
+pml_write_files(answers)
+ans = data.frame(problem.id = 1:20,answers = answers)
+x <- as.matrix(format(ans))
+rownames(x) <- rep("", nrow(x))
+print(x, quote=FALSE, right=TRUE)
+```
